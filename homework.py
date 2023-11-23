@@ -181,12 +181,12 @@ def main():
         return NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT_MESSAGE
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    messages = []
 
     while True:
         try:
             parsed_response = get_api_answer(timestamp)
             homeworks = check_response(parsed_response)
-            messages = []
             if homeworks:
                 verdict = parse_status(homeworks[0])
                 messages.append(verdict)
