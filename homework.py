@@ -84,10 +84,7 @@ def get_api_answer(timestamp):
 
 
 def check_response(response):
-    """
-    Проверяет ответ API на соответствие документации
-    из урока API сервиса Практикум.Домашка.
-    """
+    """Проверяет ответ на соответствие документации."""
     if isinstance(response, dict) is False:
         raise TypeError
     homeworks = response.get('homeworks')
@@ -104,10 +101,7 @@ def check_response(response):
 
 
 def parse_status(homework):
-    """
-    Извлекает из информации о конкретной
-    домашней работе статус этой работы.
-    """
+    """Извлекает статус работы."""
     for key in ('status', 'homework_name'):
         if key not in homework:
             raise KeyError(
