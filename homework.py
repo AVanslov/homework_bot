@@ -1,24 +1,29 @@
-from http.client import BAD_REQUEST, OK, UNAUTHORIZED
-from multiprocessing import AuthenticationError
+from collections import Counter
+from http.client import OK
+import sys
 import time
 import logging
 import os
-from venv import logger
 
 from dotenv import load_dotenv
-from requests import HTTPError, RequestException
+from requests import RequestException
 import requests
 import telegram
 
-from exceptions import EmptyResponseError
-
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    filename='main.log',
-    format='%(asctime)s, %(levelname)s, %(message)s, %(name)s'
-)
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        filename=__file__ + '.log',
+        format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
+    )
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler(stream=sys.stderr)
+logger.addHandler(handler)
+
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -36,29 +41,65 @@ HOMEWORK_VERDICTS = {
 }
 
 
+TOKENS = [
+    'PRACTICUM_TOKEN',
+    'TELEGRAM_TOKEN',
+    'TELEGRAM_CHAT_ID',
+]
+
+NO_TOKEN_MESSAGE = 'There is no variable {} in the environment.'
+SUCCESS_SEND_MESSAGE = 'The message was sent successfully'
+ERROR_SEND_MESSAGE = 'Error {} when sending the message {}'
+API_CONNECTION_ERROR_MESSAGE = (
+    'Request error: {} trying to reach API, endpoint:'
+    '{}, headers: {}, params: {}'
+)
+UNEXPECTED_RESPONSE_STATUS_MESSAGE = 'Get unexpected response status: {}'
+DENIAL_OF_ACCESS_MESSAGE = (
+    'Refusal of service the dictionary key: {key} contains an error: {}'
+)
+UNEXPECTED_DATA_TYPE_MESSAGE = (
+    'Now {} is comming in response,'
+    'but {} is expected.'
+)
+KEY_MISSING_MESSAGE = 'The key {} is missing in the response.'
+RESPONSE_CORRESPONDS_TO_DOC_MESSAGE = (
+    'The API response corresponds to the documentation.'
+)
+KEY_DOESNT_EXIST_MESSAGE = 'Key {} of homework data doesn`t exist.'
+UNEXPECTED_VALUE__OF_STATUS_MESSAGE = 'Unexpected value for key "status": {}.'
+STATUS_HAS_CHANGED_MESSAGE = 'Изменился статус проверки работы "{}". {}'
+NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT_MESSAGE = (
+    'Not all global variables are specified in the environment.'
+)
+STATUS_DIDNT_UPDATE = 'Status didn`t update. {}'
+EXEPTION_ERROR_MESSAGE = 'Error in programm process: {}'
+
+
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    TOKENS = {
-        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
-        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
-        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID,
-    }
-    for token_name, token in TOKENS.items():
-        if token is None:
+    tokens_for_logger = []
+    for name in TOKENS:
+        if globals()[name] is None:
+            tokens_for_logger.append(name)
+    if len(tokens_for_logger) > 0:
+        for name in tokens_for_logger:
             logger.critical(
-                f'There is no variable {token_name} in the environment.'
+                NO_TOKEN_MESSAGE.format(name), exc_info=True
             )
-            raise SystemExit('Forced shutdown of the program.')
+            return False
+    return True
 
 
 def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
+        logger.debug(SUCCESS_SEND_MESSAGE)
     except Exception as error:
-        logger.error(f'Error {error} sending the message')
-    finally:
-        logger.debug('The message was sent successfully')
+        logger.error(
+            ERROR_SEND_MESSAGE.format(error, message), exc_info=True
+        )
 
 
 def get_api_answer(timestamp):
@@ -72,82 +113,102 @@ def get_api_answer(timestamp):
             },
         )
     except RequestException as error:
-        logger.error(f'Request error trying to reach API {error}')
-
-    if response.status_code == BAD_REQUEST:
-        raise AuthenticationError('Found unexpectes value in the from_date.')
-    if response.status_code == UNAUTHORIZED:
-        raise ConnectionError('Invalid token')
+        raise ConnectionError(
+            API_CONNECTION_ERROR_MESSAGE.format(
+                error, ENDPOINT, HEADERS, timestamp
+            )
+        )
     if response.status_code != OK:
-        raise HTTPError('Get unexpected response status.')
+        raise ValueError(
+            UNEXPECTED_RESPONSE_STATUS_MESSAGE.format(response.status_code)
+        )
+    for key in response.json().keys():
+        if key == 'code':
+            raise PermissionError(
+                DENIAL_OF_ACCESS_MESSAGE.format(key, response.json()[key])
+            )
+        if key == 'error':
+            raise PermissionError(
+                DENIAL_OF_ACCESS_MESSAGE.format(key, response.json()[key][key])
+            )
     return response.json()
 
 
 def check_response(response):
     """Проверяет ответ на соответствие документации."""
-    if isinstance(response, dict) is False:
-        raise TypeError
+    if not isinstance(response, dict):
+        raise TypeError(
+            UNEXPECTED_DATA_TYPE_MESSAGE.format(type(response), 'dict')
+        )
     homeworks = response.get('homeworks')
     if 'homeworks' not in response:
-        raise EmptyResponseError
-    if isinstance(homeworks, list) is False:
-        raise TypeError
-    if len(homeworks) == 0:
-        raise ValueError
+        raise KeyError(
+            KEY_MISSING_MESSAGE.format('homeworks')
+        )
+    if not isinstance(homeworks, list):
+        raise TypeError(
+            UNEXPECTED_DATA_TYPE_MESSAGE.format(type(homeworks), 'list')
+        )
     logger.debug(
-        'The API response corresponds to the documentation'
+        RESPONSE_CORRESPONDS_TO_DOC_MESSAGE, exc_info=True
     )
     return homeworks
 
 
 def parse_status(homework):
-    """Извлекает статус работы."""
+    """Извлекает cтатус конкретной работы."""
     for key in ('status', 'homework_name'):
         if key not in homework:
             raise KeyError(
-                'Key {key} of homework data doesn`t exist.'
+                KEY_DOESNT_EXIST_MESSAGE.format(key)
             )
-    if homework.get('status') not in HOMEWORK_VERDICTS:
+    status = homework.get('status')
+    if status not in HOMEWORK_VERDICTS:
         raise ValueError(
-            'Unexpected value for key "homework_status": {homework_status}.'
+            UNEXPECTED_VALUE__OF_STATUS_MESSAGE.format(status)
         )
-    homework_name = homework.get('homework_name')
-    verdict = HOMEWORK_VERDICTS.get(homework.get('status'))
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    return (
+        STATUS_HAS_CHANGED_MESSAGE.format(
+            homework.get('homework_name'),
+            HOMEWORK_VERDICTS.get(status),
+        )
+    )
 
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if not check_tokens():
+        return NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT_MESSAGE
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    homework_status_dict = {}
 
     while True:
         try:
             parsed_response = get_api_answer(timestamp)
             homeworks = check_response(parsed_response)
+            messages = []
             if homeworks:
-                for homework in homeworks:
-                    verdict = parse_status(homework)
+                verdict = parse_status(homeworks[0])
+                messages.append(verdict)
             else:
-                verdict = 'Status didn`t update'
-            if verdict != homework_status_dict.get(dict):
-                if send_message(bot, verdict):
-                    homework_status_dict['verdict'] = verdict
-                    timestamp = parsed_response.get('current_date', timestamp)
+                verdict = STATUS_DIDNT_UPDATE.format('')
+                messages.append(verdict)
+            if send_message(bot, verdict):
+                homework_status = verdict
+                timestamp = parsed_response.get('current_date', timestamp)
             else:
-                logger.info(
-                    f'Status didn`t update: {verdict}'
-                )
-        except EmptyResponseError as error:
-            logger.error(f'Empty answer. {error}')
+                logger.info(STATUS_DIDNT_UPDATE.format(verdict))
         except Exception as error:
-            message = f'Error in programm process: {error}'
+            message = EXEPTION_ERROR_MESSAGE.format(error)
             logger.error(message)
-            if verdict != homework_status_dict.get('verdict'):
-                send_message(bot, message)
-                homework_status_dict['verdict'] = verdict
+            if verdict != homework_status:
+                count_repeated_messages = Counter(messages)
+                for message in messages:
+                    if count_repeated_messages[message] > 1:
+                        continue
+                    else:
+                        send_message(bot, message)
+                homework_status = verdict
         finally:
             time.sleep(RETRY_PERIOD)
 
