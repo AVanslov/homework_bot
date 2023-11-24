@@ -3,7 +3,6 @@ import logging
 import os
 import sys
 import time
-import traceback
 
 from dotenv import load_dotenv
 from requests import RequestException
@@ -186,16 +185,11 @@ def main():
             fresh_message = verdict
             if send_message(bot, verdict):
                 timestamp = parsed_response.get('current_date', timestamp)
-            else:
-                logger.info(UPDATE_MESSAGE_FAIL_SEND.format(verdict))
         except Exception as error:
             message = EXEPTION_ERROR.format(error)
             logger.error(message)
-            if message != fresh_message:
-                if send_message(bot, message):
-                    fresh_message = message
-                else:
-                    logger.info(MESSAGE_FAIL_SEND.format(message))
+            if message != fresh_message and send_message(bot, message):
+                fresh_message = message
         finally:
             time.sleep(RETRY_PERIOD)
 
@@ -203,8 +197,10 @@ def main():
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.DEBUG,
-        filename=__file__ + '.log',
+        handlers=[
+            logging.FileHandler(filename=__file__ + '.log'),
+            logging.StreamHandler(stream=sys.stdout),
+        ],
         format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
     )
-    traceback.print_stack(file=sys.stdout)
     main()
