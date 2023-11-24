@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 
 from dotenv import load_dotenv
 from requests import RequestException
@@ -69,7 +70,8 @@ NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT = (
     'Not all global variables are specified in the environment.'
 )
 STATUS_DIDNT_UPDATE = 'Status didn`t update.'
-MESSAGE_FAIL_SEND = 'Status didn`t update. {}'
+UPDATE_MESSAGE_FAIL_SEND = 'Status didn`t update. {}'
+MESSAGE_FAIL_SEND = 'Message didn`t send. {}'
 EXEPTION_ERROR = 'Error in programm process: {}'
 
 
@@ -177,22 +179,23 @@ def main():
         try:
             parsed_response = get_api_answer(timestamp)
             homeworks = check_response(parsed_response)
-            if not homeworks:
-                verdict = STATUS_DIDNT_UPDATE
-            else:
-                verdict = parse_status(homeworks[0])
+            verdict = (
+                STATUS_DIDNT_UPDATE if not homeworks
+                else parse_status(homeworks[0])
+            )
             fresh_message = verdict
             if send_message(bot, verdict):
-                fresh_message = verdict
                 timestamp = parsed_response.get('current_date', timestamp)
             else:
-                logger.info(MESSAGE_FAIL_SEND.format(verdict))
+                logger.info(UPDATE_MESSAGE_FAIL_SEND.format(verdict))
         except Exception as error:
             message = EXEPTION_ERROR.format(error)
             logger.error(message)
             if message != fresh_message:
-                send_message(bot, message)
-                fresh_message = message
+                if send_message(bot, message):
+                    fresh_message = message
+                else:
+                    logger.info(MESSAGE_FAIL_SEND.format(message))
         finally:
             time.sleep(RETRY_PERIOD)
 
@@ -203,5 +206,5 @@ if __name__ == '__main__':
         filename=__file__ + '.log',
         format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
     )
-    logging.StreamHandler(stream=sys.stdout)
+    traceback.print_stack(file=sys.stdout)
     main()
