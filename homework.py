@@ -3,7 +3,6 @@ import logging
 import os
 import sys
 import time
-import traceback
 
 from dotenv import load_dotenv
 from requests import RequestException
@@ -41,15 +40,15 @@ SUCCESS_SEND = 'The message was sent successfully'
 ERROR_SEND = 'Error {} when sending the message {}'
 API_CONNECTION_ERROR = (
     'Request error: {} trying to reach API, endpoint:'
-    '{}, headers: {}, params: {}'
+    '{url}, headers: {headers}, params: {params}'
 )
 UNEXPECTED_RESPONSE_STATUS = (
     'Get unexpected response status: {} endpoint: {},'
     'headers: {}, params: {}'
 )
 DENIAL_OF_ACCESS = (
-    'Refusal of service contains an error: {} endpoint: {},'
-    'headers: {}, params: {}'
+    'Refusal of service. Key: {} contains an error: {} endpoint: {url},'
+    'headers: {headers}, params: {params}'
 )
 UNEXPECTED_DICT_AS_DATA_TYPE = (
     'Now {} is comming in response,'
@@ -76,20 +75,19 @@ EXEPTION_ERROR = 'Error in programm process: {}'
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    tokens_for_logger = [name for name in TOKENS if globals()[name] is None]
-    if tokens_for_logger:
+    tokens = [name for name in TOKENS if globals()[name] is None]
+    if tokens:
         logger.critical(
-            NO_TOKEN.format(tokens_for_logger), exc_info=True
+            NO_TOKEN.format(tokens), exc_info=True
         )
-        raise NameError(NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT)
-    return True
+        raise ValueError(NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT)
 
 
 def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.debug(SUCCESS_SEND)
+        logger.debug(SUCCESS_SEND, exc_info=True)
         return True
     except Exception as error:
         logger.error(
@@ -118,11 +116,12 @@ def get_api_answer(timestamp):
             )
         )
     response_json = response.json()
-    keys_of_error_response = dict(code='code', error='error')
-    for key in keys_of_error_response.values():
-        if keys_of_error_response[key] in response_json.keys():
-            raise KeyError(
-                DENIAL_OF_ACCESS.format(response_json[key], **response_params)
+    for key in ('code', 'error'):
+        if key in response_json.keys():
+            raise ValueError(
+                DENIAL_OF_ACCESS.format(
+                    key, response_json[key], **response_params
+                )
             )
     return response_json
 
@@ -178,12 +177,11 @@ def main():
         try:
             parsed_response = get_api_answer(timestamp)
             homeworks = check_response(parsed_response)
-            if homeworks:
-                verdict = parse_status(homeworks[0])
-                fresh_message = verdict
-            else:
+            if not homeworks:
                 verdict = STATUS_DIDNT_UPDATE
-                fresh_message = verdict
+            else:
+                verdict = parse_status(homeworks[0])
+            fresh_message = verdict
             if send_message(bot, verdict):
                 fresh_message = verdict
                 timestamp = parsed_response.get('current_date', timestamp)
@@ -193,9 +191,8 @@ def main():
             message = EXEPTION_ERROR.format(error)
             logger.error(message)
             if message != fresh_message:
-                fresh_message = message
                 send_message(bot, message)
-                fresh_message = verdict
+                fresh_message = message
         finally:
             time.sleep(RETRY_PERIOD)
 
@@ -206,5 +203,5 @@ if __name__ == '__main__':
         filename=__file__ + '.log',
         format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
     )
-    traceback.print_exc(file=sys.stdout)
+    logging.StreamHandler(stream=sys.stdout)
     main()
