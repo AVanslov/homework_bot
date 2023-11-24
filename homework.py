@@ -1,9 +1,9 @@
-from collections import Counter
 from http.client import OK
-import sys
-import time
 import logging
 import os
+import sys
+import time
+import traceback
 
 from dotenv import load_dotenv
 from requests import RequestException
@@ -12,18 +12,7 @@ import telegram
 
 load_dotenv()
 
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        filename=__file__ + '.log',
-        format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
-    )
-
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler(stream=sys.stderr)
-logger.addHandler(handler)
-
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -47,47 +36,52 @@ TOKENS = [
     'TELEGRAM_CHAT_ID',
 ]
 
-NO_TOKEN_MESSAGE = 'There is no variable {} in the environment.'
-SUCCESS_SEND_MESSAGE = 'The message was sent successfully'
-ERROR_SEND_MESSAGE = 'Error {} when sending the message {}'
-API_CONNECTION_ERROR_MESSAGE = (
+NO_TOKEN = 'There is no variable {} in the environment.'
+SUCCESS_SEND = 'The message was sent successfully'
+ERROR_SEND = 'Error {} when sending the message {}'
+API_CONNECTION_ERROR = (
     'Request error: {} trying to reach API, endpoint:'
     '{}, headers: {}, params: {}'
 )
-UNEXPECTED_RESPONSE_STATUS_MESSAGE = 'Get unexpected response status: {}'
-DENIAL_OF_ACCESS_MESSAGE = (
-    'Refusal of service the dictionary key: {key} contains an error: {}'
+UNEXPECTED_RESPONSE_STATUS = (
+    'Get unexpected response status: {} endpoint: {},'
+    'headers: {}, params: {}'
 )
-UNEXPECTED_DATA_TYPE_MESSAGE = (
+DENIAL_OF_ACCESS = (
+    'Refusal of service contains an error: {} endpoint: {},'
+    'headers: {}, params: {}'
+)
+UNEXPECTED_DICT_AS_DATA_TYPE = (
     'Now {} is comming in response,'
-    'but {} is expected.'
+    'but dict is expected.'
 )
-KEY_MISSING_MESSAGE = 'The key {} is missing in the response.'
-RESPONSE_CORRESPONDS_TO_DOC_MESSAGE = (
+UNEXPECTED_LIST_AS_DATA_TYPE = (
+    'Now {} is comming in response,'
+    'but list is expected.'
+)
+KEY_MISSING = 'The key {} is missing in the response.'
+RESPONSE_CORRESPONDS_TO_DOC = (
     'The API response corresponds to the documentation.'
 )
-KEY_DOESNT_EXIST_MESSAGE = 'Key {} of homework data doesn`t exist.'
-UNEXPECTED_VALUE__OF_STATUS_MESSAGE = 'Unexpected value for key "status": {}.'
-STATUS_HAS_CHANGED_MESSAGE = 'Изменился статус проверки работы "{}". {}'
-NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT_MESSAGE = (
+KEY_DOESNT_EXIST = 'Key {} of homework data doesn`t exist.'
+UNEXPECTED_VALUE_OF_STATUS = 'Unexpected value for key "status": {}.'
+STATUS_HAS_CHANGED = 'Изменился статус проверки работы "{}". {}'
+NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT = (
     'Not all global variables are specified in the environment.'
 )
-STATUS_DIDNT_UPDATE = 'Status didn`t update. {}'
-EXEPTION_ERROR_MESSAGE = 'Error in programm process: {}'
+STATUS_DIDNT_UPDATE = 'Status didn`t update.'
+MESSAGE_FAIL_SEND = 'Status didn`t update. {}'
+EXEPTION_ERROR = 'Error in programm process: {}'
 
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    tokens_for_logger = []
-    for name in TOKENS:
-        if globals()[name] is None:
-            tokens_for_logger.append(name)
-    if len(tokens_for_logger) > 0:
-        for name in tokens_for_logger:
-            logger.critical(
-                NO_TOKEN_MESSAGE.format(name), exc_info=True
-            )
-            return False
+    tokens_for_logger = [name for name in TOKENS if globals()[name] is None]
+    if tokens_for_logger:
+        logger.critical(
+            NO_TOKEN.format(tokens_for_logger), exc_info=True
+        )
+        raise NameError(NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT)
     return True
 
 
@@ -95,62 +89,61 @@ def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.debug(SUCCESS_SEND_MESSAGE)
+        logger.debug(SUCCESS_SEND)
+        return True
     except Exception as error:
         logger.error(
-            ERROR_SEND_MESSAGE.format(error, message), exc_info=True
+            ERROR_SEND.format(error, message), exc_info=True
         )
+        return False
 
 
 def get_api_answer(timestamp):
     """Делает запрос к эндпоинту API-сервиса."""
+    response_params = dict(
+        url=ENDPOINT,
+        headers=HEADERS,
+        params={'from_date': timestamp},
+    )
     try:
-        response = requests.get(
-            ENDPOINT,
-            headers=HEADERS,
-            params={
-                'from_date': timestamp
-            },
-        )
+        response = requests.get(**response_params)
     except RequestException as error:
         raise ConnectionError(
-            API_CONNECTION_ERROR_MESSAGE.format(
-                error, ENDPOINT, HEADERS, timestamp
-            )
+            API_CONNECTION_ERROR.format(error, **response_params)
         )
     if response.status_code != OK:
         raise ValueError(
-            UNEXPECTED_RESPONSE_STATUS_MESSAGE.format(response.status_code)
+            UNEXPECTED_RESPONSE_STATUS.format(
+                response.status_code, **response_params
+            )
         )
-    for key in response.json().keys():
-        if key == 'code':
-            raise PermissionError(
-                DENIAL_OF_ACCESS_MESSAGE.format(key, response.json()[key])
+    response_json = response.json()
+    keys_of_error_response = dict(code='code', error='error')
+    for key in keys_of_error_response.values():
+        if keys_of_error_response[key] in response_json.keys():
+            raise KeyError(
+                DENIAL_OF_ACCESS.format(response_json[key], **response_params)
             )
-        if key == 'error':
-            raise PermissionError(
-                DENIAL_OF_ACCESS_MESSAGE.format(key, response.json()[key][key])
-            )
-    return response.json()
+    return response_json
 
 
 def check_response(response):
     """Проверяет ответ на соответствие документации."""
     if not isinstance(response, dict):
         raise TypeError(
-            UNEXPECTED_DATA_TYPE_MESSAGE.format(type(response), 'dict')
+            UNEXPECTED_DICT_AS_DATA_TYPE.format(type(response))
         )
-    homeworks = response.get('homeworks')
     if 'homeworks' not in response:
         raise KeyError(
-            KEY_MISSING_MESSAGE.format('homeworks')
+            KEY_MISSING.format('homeworks')
         )
+    homeworks = response.get('homeworks')
     if not isinstance(homeworks, list):
         raise TypeError(
-            UNEXPECTED_DATA_TYPE_MESSAGE.format(type(homeworks), 'list')
+            UNEXPECTED_LIST_AS_DATA_TYPE.format(type(homeworks))
         )
     logger.debug(
-        RESPONSE_CORRESPONDS_TO_DOC_MESSAGE, exc_info=True
+        RESPONSE_CORRESPONDS_TO_DOC, exc_info=True
     )
     return homeworks
 
@@ -160,15 +153,15 @@ def parse_status(homework):
     for key in ('status', 'homework_name'):
         if key not in homework:
             raise KeyError(
-                KEY_DOESNT_EXIST_MESSAGE.format(key)
+                KEY_DOESNT_EXIST.format(key)
             )
     status = homework.get('status')
     if status not in HOMEWORK_VERDICTS:
         raise ValueError(
-            UNEXPECTED_VALUE__OF_STATUS_MESSAGE.format(status)
+            UNEXPECTED_VALUE_OF_STATUS.format(status)
         )
     return (
-        STATUS_HAS_CHANGED_MESSAGE.format(
+        STATUS_HAS_CHANGED.format(
             homework.get('homework_name'),
             HOMEWORK_VERDICTS.get(status),
         )
@@ -177,11 +170,9 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    if not check_tokens():
-        return NOT_ALL_VARIABLES_IN_THE_ENVIRONMENT_MESSAGE
+    check_tokens()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    messages = []
 
     while True:
         try:
@@ -189,29 +180,31 @@ def main():
             homeworks = check_response(parsed_response)
             if homeworks:
                 verdict = parse_status(homeworks[0])
-                messages.append(verdict)
+                fresh_message = verdict
             else:
-                verdict = STATUS_DIDNT_UPDATE.format('')
-                messages.append(verdict)
+                verdict = STATUS_DIDNT_UPDATE
+                fresh_message = verdict
             if send_message(bot, verdict):
-                homework_status = verdict
+                fresh_message = verdict
                 timestamp = parsed_response.get('current_date', timestamp)
             else:
-                logger.info(STATUS_DIDNT_UPDATE.format(verdict))
+                logger.info(MESSAGE_FAIL_SEND.format(verdict))
         except Exception as error:
-            message = EXEPTION_ERROR_MESSAGE.format(error)
+            message = EXEPTION_ERROR.format(error)
             logger.error(message)
-            if verdict != homework_status:
-                count_repeated_messages = Counter(messages)
-                for message in messages:
-                    if count_repeated_messages[message] > 1:
-                        continue
-                    else:
-                        send_message(bot, message)
-                homework_status = verdict
+            if message != fresh_message:
+                fresh_message = message
+                send_message(bot, message)
+                fresh_message = verdict
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        filename=__file__ + '.log',
+        format='%(asctime)s, %(levelname)s, %(message)s, %(name)s',
+    )
+    traceback.print_exc(file=sys.stdout)
     main()
